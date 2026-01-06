@@ -1,7 +1,10 @@
+import os
 from datetime import date, datetime
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 from app.models import Holiday, WorkDay, HolidayResponse
 from app.services import HolidayService
@@ -38,6 +41,27 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+# Optional API key protection (recommended for public deployments)
+# If HUNGARIAN_HOLIDAYS_API_KEY (or HOLIDAYS_API_KEY) is not set, no auth is enforced.
+_API_KEY = (os.getenv("HUNGARIAN_HOLIDAYS_API_KEY") or os.getenv("HOLIDAYS_API_KEY") or "").strip()
+_API_KEY_HEADER = "X-API-KEY"
+_API_KEY_EXEMPT_PATHS = {
+    "/",
+    "/health",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+}
+
+
+class ApiKeyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        if _API_KEY and request.url.path not in _API_KEY_EXEMPT_PATHS:
+            provided_key = request.headers.get(_API_KEY_HEADER, "")
+            if provided_key != _API_KEY:
+                return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+        return await call_next(request)
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -46,6 +70,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add API key middleware (no-op if no key configured)
+app.add_middleware(ApiKeyMiddleware)
 
 # Initialize service
 holiday_service = HolidayService()
