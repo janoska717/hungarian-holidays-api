@@ -29,7 +29,6 @@ app = FastAPI(
     
     **Hungarian Sources (Primary):**
     - MFA.gov.hu - Official Hungarian Ministry of Foreign Affairs
-    - PublicHolidays.hu - Comprehensive Hungarian holiday list
     - DailyNewsHungary.com - Weekend workday announcements
     
     **International Sources (Fallback):**

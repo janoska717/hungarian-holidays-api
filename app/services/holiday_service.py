@@ -7,7 +7,6 @@ from app.models import Holiday, WorkDay, HolidayResponse, SourceInfo
 from app.scrapers import (
     BaseScraper,
     MfaGovHuScraper,
-    PublicHolidaysScraper,
     DailyNewsHungaryScraper,
     TimeAndDateScraper,
     OfficeHolidaysScraper,
@@ -28,7 +27,6 @@ class HolidayService:
             PontosIdoScraper(),          # Hungarian - excellent structured data with Dec 24
             MfaGovHuScraper(),           # Hungarian official - includes bridge days
             SzakmaiKamaraScraper(),      # Hungarian - good long weekend info
-            PublicHolidaysScraper(),     # PublicHolidays.hu - best structured data
             TimeAndDateScraper(),         # International backup
             OfficeHolidaysScraper(),      # International fallback
         ]
@@ -42,11 +40,6 @@ class HolidayService:
             SzakmaiKamaraScraper(),      # Hungarian - mentions specific Saturday workdays
             DailyNewsHungaryScraper(),   # News articles about workday announcements
         ]
-
-        # PublicHolidays.hu frequently blocks Azure/cloud IP ranges (403) and is not a primary
-        # source for "áthelyezett munkanap" data. Keep it disabled for workdays by default.
-        if (os.getenv("INCLUDE_PUBLICHOLIDAYS_FOR_WORKDAYS") or "").strip().lower() in {"1", "true", "yes"}:
-            self.workday_scrapers.append(PublicHolidaysScraper())
         
         # Cache results for 1 hour to avoid excessive scraping
         self._cache: TTLCache = TTLCache(maxsize=100, ttl=3600)

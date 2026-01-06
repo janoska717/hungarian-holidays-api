@@ -64,18 +64,32 @@ class UnnepnapokScraper(BaseScraper):
         if not line:
             return None
 
-        # Accept both hyphen and en-dash separators
-        # groups: year, month, day, title
+        # Try multiple patterns to be more flexible
+        # Pattern 1: YYYY. month DD. – dayname – title
         match = re.match(
-            r"^(\d{4})\.\s*([\wáéíóöőúüű]+)\s+(\d{1,2})\.\s*[–-]\s*[^–-]+\s*[–-]\s*(.+?)\s*$",
+            r"^(\d{4})\.\s*([\wáéíóöőúüű]+)\.?\s+(\d{1,2})\.\s*[–\-—]\s*.+?\s*[–\-—]\s*(.+)$",
             line,
             flags=re.IGNORECASE,
         )
+        
+        # Pattern 2: YYYY. month DD. – title (no day name)
+        if not match:
+            match = re.match(
+                r"^(\d{4})\.\s*([\wáéíóöőúüű]+)\.?\s+(\d{1,2})\.\s*[–\-—]\s*(.+)$",
+                line,
+                flags=re.IGNORECASE,
+            )
+        
         if not match:
             return None
 
-        year_str, month_str, day_str, title = match.groups()
-        month_key = month_str.strip().lower()
+        year_str, month_str, day_str = match.group(1), match.group(2), match.group(3)
+        title = match.group(4).strip()
+        
+        # Clean up title - remove day names at the start
+        title = re.sub(r"^(hétfő|kedd|szerda|csütörtök|péntek|szombat|vasárnap)\s*[–\-—]\s*", "", title, flags=re.IGNORECASE).strip()
+        
+        month_key = month_str.strip().lower().rstrip(".")
         month = self.MONTH_MAP.get(month_key)
         if not month:
             # Sometimes month has trailing punctuation
@@ -88,7 +102,7 @@ class UnnepnapokScraper(BaseScraper):
         except ValueError:
             return None
 
-        return int(year_str), parsed_date, title.strip()
+        return int(year_str), parsed_date, title
 
     def scrape_holidays(self, year: int) -> list[Holiday]:
         soup = self.fetch_page(year)
@@ -152,9 +166,28 @@ class UnnepnapokScraper(BaseScraper):
             if parsed_date in seen:
                 continue
 
-            # Reason is often in parentheses
-            reason_match = re.search(r"\(([^)]+)\)", title)
-            reason = reason_match.group(1).strip() if reason_match else title
+            # Extract reason from parentheses or "helyett" pattern
+            reason = title
+            
+            # Try parentheses first: "munkanap (január 2. péntek helyett)"
+            paren_match = re.search(r"\(([^)]+)\)", title)
+            if paren_match:
+                reason = paren_match.group(1).strip()
+            else:
+                # Try "X helyett" pattern
+                helyett_match = re.search(r"helyett", title, re.IGNORECASE)
+                if helyett_match:
+                    # Extract the date part before "helyett"
+                    before_helyett = title[:helyett_match.start()].strip()
+                    # Clean up "munkanap" and other noise
+                    reason = re.sub(r"^(munkanap|szombati\s+munkanap)[,\s]*", "", before_helyett, flags=re.IGNORECASE).strip()
+                    if reason:
+                        reason = f"{reason} helyett"
+            
+            # Clean title noise
+            reason = re.sub(r"^(munkanap|szombati\s+munkanap)[,\s\-–—]*", "", reason, flags=re.IGNORECASE).strip()
+            if not reason:
+                reason = "Áthelyezett munkanap"
 
             workdays.append(
                 WorkDay(
