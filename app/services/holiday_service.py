@@ -1,5 +1,6 @@
 from datetime import datetime, date
 from typing import Optional
+import os
 from cachetools import TTLCache
 
 from app.models import Holiday, WorkDay, HolidayResponse, SourceInfo
@@ -37,8 +38,12 @@ class HolidayService:
             MfaGovHuScraper(),           # Official government info for workdays
             SzakmaiKamaraScraper(),      # Hungarian - mentions specific Saturday workdays
             DailyNewsHungaryScraper(),   # News articles about workday announcements
-            PublicHolidaysScraper(),     # May have some workday info
         ]
+
+        # PublicHolidays.hu frequently blocks Azure/cloud IP ranges (403) and is not a primary
+        # source for "áthelyezett munkanap" data. Keep it disabled for workdays by default.
+        if (os.getenv("INCLUDE_PUBLICHOLIDAYS_FOR_WORKDAYS") or "").strip().lower() in {"1", "true", "yes"}:
+            self.workday_scrapers.append(PublicHolidaysScraper())
         
         # Cache results for 1 hour to avoid excessive scraping
         self._cache: TTLCache = TTLCache(maxsize=100, ttl=3600)
