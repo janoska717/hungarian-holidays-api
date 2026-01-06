@@ -6,6 +6,7 @@ from .timeanddate import TimeAndDateScraper
 from .officeholidays import OfficeHolidaysScraper
 from .pontosido import PontosIdoScraper
 from .szakmaikamara import SzakmaiKamaraScraper
+from .unnepnapok import UnnepnapokScraper
 
 __all__ = [
     "BaseScraper",
@@ -16,4 +17,5 @@ __all__ = [
     "OfficeHolidaysScraper",
     "PontosIdoScraper",
     "SzakmaiKamaraScraper",
+    "UnnepnapokScraper",
 ]

@@ -13,6 +13,7 @@ from app.scrapers import (
     OfficeHolidaysScraper,
     PontosIdoScraper,
     SzakmaiKamaraScraper,
+    UnnepnapokScraper,
 )
 
 
@@ -23,6 +24,7 @@ class HolidayService:
         # Initialize all scrapers - ordered by preference
         # Hungarian sources are prioritized for accurate munkanap-áthelyezés data
         self.holiday_scrapers: list[BaseScraper] = [
+            UnnepnapokScraper(),        # Hungarian - strong year-specific lists
             PontosIdoScraper(),          # Hungarian - excellent structured data with Dec 24
             MfaGovHuScraper(),           # Hungarian official - includes bridge days
             SzakmaiKamaraScraper(),      # Hungarian - good long weekend info
@@ -34,6 +36,7 @@ class HolidayService:
         # Scrapers specifically for weekend workdays (szombati munkanapok)
         # Hungarian sources have the official workday rearrangement info
         self.workday_scrapers: list[BaseScraper] = [
+            UnnepnapokScraper(),        # Hungarian - explicit Saturday workday list
             PontosIdoScraper(),          # Hungarian - has clear munkanap info
             MfaGovHuScraper(),           # Official government info for workdays
             SzakmaiKamaraScraper(),      # Hungarian - mentions specific Saturday workdays
