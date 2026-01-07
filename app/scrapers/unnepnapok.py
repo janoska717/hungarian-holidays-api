@@ -113,7 +113,19 @@ class UnnepnapokScraper(BaseScraper):
         seen: set[date] = set()
 
         # Scan all lines and take those matching the requested year
+        # Stop when we encounter the "egyéb ünnepek" section
+        in_egyeb_section = False
+        
         for raw_line in soup.get_text("\n").splitlines():
+            # Check if we've reached the "egyéb ünnepek" section
+            if "egyéb ünnepek" in raw_line.lower() and "nem munkaszüneti" in raw_line.lower():
+                in_egyeb_section = True
+                continue
+            
+            # Skip lines in the "egyéb ünnepek" section
+            if in_egyeb_section:
+                continue
+            
             parsed = self._parse_date_line(raw_line)
             if not parsed:
                 continue
