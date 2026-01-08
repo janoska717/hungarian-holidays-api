@@ -46,7 +46,7 @@ class SzakmaiKamaraScraper(BaseScraper):
     def scrape_holidays(self, year: int) -> list[Holiday]:
         """
         Scrape holiday information from szakmaikamara.hu.
-        This site doesn't have a complete list, but mentions key dates.
+        Parses the structured list of munkaszüneti napok and pihenőnapok.
         """
         soup = self.fetch_page(year)
         if not soup:
@@ -54,33 +54,79 @@ class SzakmaiKamaraScraper(BaseScraper):
         
         holidays = []
         page_text = soup.get_text()
-        
-        # Look for long weekend date ranges that indicate holidays
-        # Pattern: "YYYY. hónap DD-DD-DD-DD." (e.g., "2025. december 24-25-26-27-28.")
-        range_patterns = [
-            # Christmas long weekend
-            (rf"{year}\.\s*december\s+(\d{{1,2}})-(\d{{1,2}})-(\d{{1,2}})-(\d{{1,2}})-(\d{{1,2}})", 12, "Christmas Holiday Period"),
-            # Easter weekend
-            (rf"{year}\.\s*április\s+(\d{{1,2}})-(\d{{1,2}})-(\d{{1,2}})-(\d{{1,2}})", 4, "Easter Holiday Period"),
-            # May Day weekend
-            (rf"{year}\.\s*május\s+(\d{{1,2}})-(\d{{1,2}})-(\d{{1,2}})-(\d{{1,2}})", 5, "Labour Day Holiday Period"),
-            # October 23 weekend
-            (rf"{year}\.\s*október\s+(\d{{1,2}})-(\d{{1,2}})-(\d{{1,2}})-(\d{{1,2}})", 10, "October Revolution Holiday Period"),
-            # Pentecost weekend (3 days)
-            (rf"{year}\.\s*június\s+(\d{{1,2}})-(\d{{1,2}})-(\d{{1,2}})", 6, "Whit Weekend"),
-        ]
-        
         seen_dates = set()
         
-        for pattern, month, holiday_name in range_patterns:
-            match = re.search(pattern, page_text, re.IGNORECASE)
-            if match:
-                days = [int(d) for d in match.groups()]
-                for day in days:
+        # Build month pattern
+        month_pattern = "|".join(self.MONTH_MAP.keys())
+        day_pattern = "hétfő|kedd|szerda|csütörtök|péntek|szombat|vasárnap"
+        
+        # First, identify Saturday workdays to exclude them
+        saturday_workdays = set()
+        workday_pattern = rf"({month_pattern})\s+(\d{{1,2}})[\.,]?\s*szombat.*?munkanap"
+        for match in re.finditer(workday_pattern, page_text, re.IGNORECASE):
+            month_name = match.group(1).lower()
+            day = int(match.group(2))
+            month = self.MONTH_MAP.get(month_name)
+            if month:
+                try:
+                    saturday_workdays.add(date(year, month, day))
+                except ValueError:
+                    pass
+        
+        # Pattern 1: Standard format "január 1., csütörtök" or "május 1., péntek"
+        # Matches lines like "január 1., csütörtök" or "április 3., péntek (nagypéntek)"
+        # Exclude szombat entries that are followed by "munkanap"
+        standard_pattern = rf"({month_pattern})\s+(\d{{1,2}})[\.,]\s*({day_pattern})"
+        
+        for match in re.finditer(standard_pattern, page_text, re.IGNORECASE):
+            month_name = match.group(1).lower()
+            day = int(match.group(2))
+            day_name = match.group(3).lower() if match.group(3) else None
+            month = self.MONTH_MAP.get(month_name)
+            
+            if month:
+                try:
+                    holiday_date = date(year, month, day)
+                    # Skip if it's a Saturday workday
+                    if holiday_date in saturday_workdays:
+                        continue
+                    # Skip if it's szombat and could be a workday (check context)
+                    if day_name == "szombat":
+                        # Check if "munkanap" appears nearby in context
+                        match_end = match.end()
+                        context_after = page_text[match_end:match_end + 50].lower()
+                        if "munkanap" in context_after:
+                            continue
+                    # Also skip if it's a pihenőnap (bridge day) - those are handled separately
+                    match_end = match.end()
+                    context_after = page_text[match_end:match_end + 30].lower()
+                    if "pihenőnap" in context_after:
+                        continue
+                    if holiday_date not in seen_dates:
+                        specific_name = self._get_specific_holiday_name(holiday_date)
+                        holidays.append(Holiday(
+                            date=holiday_date,
+                            name=specific_name,
+                            name_en=specific_name,
+                            is_national=True
+                        ))
+                        seen_dates.add(holiday_date)
+                except ValueError:
+                    continue
+        
+        # Pattern 2: Combined format "december 25., péntek és december 26., szombat"
+        combined_pattern = rf"({month_pattern})\s+(\d{{1,2}})[\.,]?\s*({day_pattern})?\s+és\s+({month_pattern})\s+(\d{{1,2}})[\.,]?\s*({day_pattern})?"
+        
+        for match in re.finditer(combined_pattern, page_text, re.IGNORECASE):
+            for i, (month_idx, day_idx) in enumerate([(1, 2), (4, 5)]):
+                month_name = match.group(month_idx).lower()
+                day = int(match.group(day_idx))
+                month = self.MONTH_MAP.get(month_name)
+                
+                if month:
                     try:
                         holiday_date = date(year, month, day)
                         if holiday_date not in seen_dates:
-                            # Determine specific holiday name based on date
                             specific_name = self._get_specific_holiday_name(holiday_date)
                             holidays.append(Holiday(
                                 date=holiday_date,
@@ -91,6 +137,29 @@ class SzakmaiKamaraScraper(BaseScraper):
                             seen_dates.add(holiday_date)
                     except ValueError:
                         continue
+        
+        # Pattern 3: Full date format "2026. január 2., péntek pihenőnap"
+        full_date_pattern = rf"{year}\.\s*({month_pattern})\s+(\d{{1,2}})[\.,]?\s*(?:,?\s*)?({day_pattern})?\s*pihenőnap"
+        
+        for match in re.finditer(full_date_pattern, page_text, re.IGNORECASE):
+            month_name = match.group(1).lower()
+            day = int(match.group(2))
+            month = self.MONTH_MAP.get(month_name)
+            
+            if month:
+                try:
+                    holiday_date = date(year, month, day)
+                    if holiday_date not in seen_dates:
+                        specific_name = self._get_bridge_day_name(holiday_date)
+                        holidays.append(Holiday(
+                            date=holiday_date,
+                            name=specific_name,
+                            name_en=specific_name,
+                            is_national=False  # Bridge days are not national holidays
+                        ))
+                        seen_dates.add(holiday_date)
+                except ValueError:
+                    continue
         
         return sorted(holidays, key=lambda x: x.date)
     
@@ -132,8 +201,8 @@ class SzakmaiKamaraScraper(BaseScraper):
                 return "Easter Monday"
             elif d.weekday() == 5:  # Saturday
                 return "Easter Saturday"
-        elif d.month == 6:
-            # Pentecost
+        elif d.month == 5 or d.month == 6:
+            # Pentecost (can be in May or June)
             if d.weekday() == 6:  # Sunday
                 return "Whit Sunday"
             elif d.weekday() == 0:  # Monday
@@ -143,10 +212,20 @@ class SzakmaiKamaraScraper(BaseScraper):
         
         return f"Holiday ({d.strftime('%B %d')})"
     
+    def _get_bridge_day_name(self, d: date) -> str:
+        """Get name for bridge days (pihenőnapok)."""
+        if d.month == 1 and d.day == 2:
+            return "Bridge Day (New Year)"
+        elif d.month == 8 and d.day == 21:
+            return "Bridge Day (St. Stephen's Day)"
+        elif d.month == 12 and d.day == 24:
+            return "Christmas Eve (Bridge Day)"
+        return f"Bridge Day ({d.strftime('%B %d')})"
+    
     def scrape_weekend_workdays(self, year: int) -> list[WorkDay]:
         """
         Scrape weekend workday info from szakmaikamara.hu.
-        The site mentions specific Saturday workdays.
+        Parses the structured list of Saturday workdays (szombati munkanapok).
         """
         soup = self.fetch_page(year)
         if not soup:
@@ -154,57 +233,96 @@ class SzakmaiKamaraScraper(BaseScraper):
         
         workdays = []
         page_text = soup.get_text()
+        seen_dates = set()
         
-        # Look for specific mention of Saturday workdays
-        # Pattern: "május 17-én, október 18-án, és december 13-án"
-        # or "YYYY-BEN IS HÁROM ILYEN" followed by dates
+        # Build month pattern
+        full_month_pattern = "|".join(self.MONTH_MAP.keys())
         
-        # Extract dates mentioned as workdays
-        workday_patterns = [
-            # Direct mentions like "május 17-én"
-            (r"május\s+(\d{1,2})(?:-[eé]n)?(?:,|\s)", 5),
-            (r"október\s+(\d{1,2})(?:-[áa]n)?(?:,|\s)", 10),
-            (r"december\s+(\d{1,2})(?:-[áa]n)?(?:,|\s)", 12),
-        ]
+        # Pattern 1: Full format "2026. január 10. szombat munkanap"
+        # or "2026. január 10., szombat munkanap"
+        full_workday_pattern = rf"{year}\.\s*({full_month_pattern})\s+(\d{{1,2}})[\.,]?\s*(?:,?\s*)?szombat\s+munkanap"
         
-        # Check if context mentions these as workdays
-        if "szombati munkanap" in page_text.lower() or "ledolgozós" in page_text.lower():
-            for pattern, month in workday_patterns:
-                matches = re.finditer(pattern, page_text, re.IGNORECASE)
-                for match in matches:
-                    day = int(match.group(1))
+        for match in re.finditer(full_workday_pattern, page_text, re.IGNORECASE):
+            month_name = match.group(1).lower()
+            day = int(match.group(2))
+            month = self.MONTH_MAP.get(month_name)
+            
+            if month:
+                try:
+                    workday_date = date(year, month, day)
+                    if workday_date not in seen_dates and workday_date.weekday() == 5:  # Verify Saturday
+                        reason = self._get_workday_reason(workday_date)
+                        workdays.append(WorkDay(
+                            date=workday_date,
+                            original_day="Saturday",
+                            reason=reason
+                        ))
+                        seen_dates.add(workday_date)
+                except ValueError:
+                    continue
+        
+        # Pattern 2: Inline format "január 10-én, augusztus 8-án és december 12-én"
+        # when followed by context about workdays
+        month_pattern = "|".join(self.MONTH_MAP.keys())
+        inline_dates_pattern = rf"({month_pattern})\s+(\d{{1,2}})-[éáa]n"
+        
+        # Check if we're in a context talking about workdays (near "dolgozni kell" or similar)
+        if "dolgozni kell" in page_text.lower() or "szombati" in page_text.lower():
+            for match in re.finditer(inline_dates_pattern, page_text, re.IGNORECASE):
+                month_name = match.group(1).lower()
+                day = int(match.group(2))
+                month = self.MONTH_MAP.get(month_name)
+                
+                if month:
                     try:
                         workday_date = date(year, month, day)
-                        # Verify it's a Saturday
-                        if workday_date.weekday() == 5:
+                        if workday_date not in seen_dates and workday_date.weekday() == 5:  # Verify Saturday
                             reason = self._get_workday_reason(workday_date)
                             workdays.append(WorkDay(
                                 date=workday_date,
                                 original_day="Saturday",
                                 reason=reason
                             ))
+                            seen_dates.add(workday_date)
                     except ValueError:
                         continue
         
-        # Remove duplicates
-        unique_workdays = []
-        seen = set()
-        for w in workdays:
-            if w.date not in seen:
-                unique_workdays.append(w)
-                seen.add(w.date)
+        # Pattern 3: Table format "január 10. szombat | munkanap" or "áthelyezett munkanap"
+        table_month_pattern = "|".join(self.MONTH_MAP.keys())
+        table_pattern = rf"({table_month_pattern})\s+(\d{{1,2}})[\.,]?\s*szombat.*?(?:munkanap|áthelyezett)"
         
-        return sorted(unique_workdays, key=lambda x: x.date)
+        for match in re.finditer(table_pattern, page_text, re.IGNORECASE):
+            month_name = match.group(1).lower()
+            day = int(match.group(2))
+            month = self.MONTH_MAP.get(month_name)
+            
+            if month:
+                try:
+                    workday_date = date(year, month, day)
+                    if workday_date not in seen_dates and workday_date.weekday() == 5:  # Verify Saturday
+                        reason = self._get_workday_reason(workday_date)
+                        workdays.append(WorkDay(
+                            date=workday_date,
+                            original_day="Saturday",
+                            reason=reason
+                        ))
+                        seen_dates.add(workday_date)
+                except ValueError:
+                    continue
+        
+        return sorted(workdays, key=lambda x: x.date)
     
     def _get_workday_reason(self, d: date) -> str:
         """Get reason for workday based on date."""
-        if d.month == 5:
+        if d.month == 1:
+            return "Bridge day for New Year (January 2)"
+        elif d.month == 5:
             return "Bridge day for Labour Day (May 2)"
+        elif d.month == 8:
+            return "Bridge day for St. Stephen's Day (August 21)"
         elif d.month == 10:
             return "Bridge day for October 23 Revolution Day"
         elif d.month == 12:
             return "Bridge day for Christmas Eve (December 24)"
-        elif d.month == 8:
-            return "Bridge day for St. Stephen's Day (August 20)"
         return "Transferred workday"
 
